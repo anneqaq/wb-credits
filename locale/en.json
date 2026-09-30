@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "WorkBuddy Credits",
+    "description": "Shows the WorkBuddy gateway credit balance under the composer, with a model rate-limit badge, a hover breakdown of every account in the pool, and the recent output speed."
+  }
+}

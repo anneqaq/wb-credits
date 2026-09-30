@@ -1,0 +1,27 @@
+# wb-credits bundle patch —— 对 profile 根插一行。
+#
+# 行 id 是配置树里的稳定标识：后加载的层（用户自己的 profile cordis.patch.yml、
+# $DSH_HOME/cordis.patch.yml、--patch 覆盖层）可以按 id 覆盖该行，
+# 覆盖是替换整个 `config`（不做深合并）。
+#
+# 注意 `name` 写的是**包名**而不是绝对路径 —— 这样通过
+#   dsh plugin --profile <profile> add wb-credits
+# 装进 profile 之后即可解析，用户不必手写路径。
+#
+# 若只是在本地开发、直接挂源码目录（没装进 profile），请改用绝对路径形式：
+#   - insert:
+#       - id: wb-credits
+#         name: /absolute/path/to/wb-credits/lib/index.js
+#
+# 只有在网关 **强制校验 API Key** 且你不想用环境变量时，才需要写 config：
+#   - insert:
+#       - id: wb-credits
+#         name: 'wb-credits'
+#         config:
+#           # baseUrl 默认 http://127.0.0.1:7863
+#           # 指向网关项目目录，从它的 config.json 里读 api_key
+#           projectDir: /path/to/workbuddy2api
+
+- insert:
+    - id: wb-credits
+      name: 'wb-credits'

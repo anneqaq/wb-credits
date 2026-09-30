@@ -1,0 +1,60 @@
+{
+  "name": "wb-credits",
+  "version": "0.4.0",
+  "private": true,
+  "description": "WorkBuddy 积分：对话底部显示剩余总积分 + 模型限流徽标 + 悬停账号池余额明细 + 最近输出速度（DSH 本地插件，双半边）",
+  "type": "module",
+  "main": "lib/index.js",
+  "icon": "./icon.svg",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/**/*.js",
+    "locale/*.json",
+    "cordis.patch.yml",
+    "icon.svg",
+    "selftest.mjs",
+    "hosttest.mjs",
+    "README.md"
+  ],
+  "scripts": {
+    "selftest": "node selftest.mjs",
+    "hosttest": "node hosttest.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "category": "ui",
+    "displayName": "WorkBuddy 积分",
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "workbuddy",
+    "credits",
+    "balance",
+    "rate-limit"
+  ]
+}
