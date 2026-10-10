@@ -1,8 +1,8 @@
 {
   "name": "wb-credits",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
-  "description": "WorkBuddy 积分：对话底部显示剩余总积分 + 模型限流徽标 + 悬停账号池余额明细 + 最近输出速度（DSH 本地插件，双半边）",
+  "description": "WorkBuddy 积分：对话底部显示剩余总积分 + 模型限流徽标 + 悬停账号积分明细 + 最近输出速度（DSH 插件，双半边）",
   "type": "module",
   "main": "lib/index.js",
   "icon": "./icon.svg",

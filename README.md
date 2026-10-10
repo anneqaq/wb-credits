@@ -1,7 +1,7 @@
 # wb-credits — DSH 插件：对话底部显示 WorkBuddy 积分
 
 在 DSH Web 的对话输入卡片下方显示 WorkBuddy 反代网关的**剩余总积分**，
-有模型被 6004 限流时显示**限流徽标**，鼠标悬停展开**各账号池余额明细**，
+有模型被 6004 限流时显示**限流徽标**，鼠标悬停展开**各账号积分明细**，
 流式输出时显示**最近 8s 的输出速度**（估算 tok/s）。
 
 ## 当前进度
@@ -10,7 +10,7 @@
 |---|---|
 | 剩余总积分 | ✅ 已实现（轮询，30s） |
 | 模型限流徽标（6004 台账） | ✅ 已实现（轮询，60s，悬停展开明细） |
-| 悬停账号池余额明细 | ✅ 已实现（原生 title，零依赖） |
+| 悬停账号积分明细 | ✅ 已实现（原生 title，零依赖） |
 | 最近输出速度（估算 tok/s） | ✅ 已实现（订阅会话流式快照，8s 滑动窗口，空闲隐藏） |
 | 每次对话消耗的积分 | ⏳ 待做，见文末「后续」 |
 | 当前会话累计消耗 | ⏳ 待做，见文末「后续」 |
@@ -18,9 +18,12 @@
 ## 界面元素
 
 ```
-[● 限流 2]  [输出 42 tok/s]  WorkBuddy 剩余积分 5,770 / 10,901 · 已用 5,131
+[● 限流 2]  [输出 42 tok/s]  WorkBuddy 剩余积分 5,745 · 4 个账号
 ```
 
+- **剩余总积分**：网关 `/status` 各账号 `credits` 之和。网关没有「总额 / 已用」口径
+  （只有每账号的剩余），所以这里不做除法、不显示已用，改为标注参与汇总的账号数；
+  有冷却/停用账号时追加「N 个异常」。
 - **限流徽标**（左侧琥珀色）：仅当网关 `/status` 的模型级限流台账
   （`accounts[].rate_limited_models[]`，6004 用量超限触发的模型级独立冷却）非空时显示。
   悬停展开：受影响账号数、上游权威重置时间（`reset_at`，「将在 X 重置」的滚动 24h 墙钟）、
@@ -34,25 +37,28 @@
   订阅 chat 视图快照的 `legacy.partial`（流式期间随 animation-frame 更新的累积
   text/reasoning/tool-call blocks）；token 数按字符折算（CJK 1 字 ≈ 1 token、
   拉丁 ≈ 5.2 字符/token，流式期间拿不到精确 usage，收尾帧才有）。
-- **悬停明细**：鼠标放到整行上，原生 title 展开「账号池余额明细」——每个账号的
-  剩余/已用/总额（失败账号带原因），底部附刷新时间。用原生 `title` 而非弹层：
-  零依赖、不挡视线、随 30s 轮询自动更新。
+- **悬停明细**：鼠标放到整行上，原生 title 展开「账号池积分明细」——每个账号的
+  剩余积分，冷却中 / 已停用的账号带状态与截止时间，底部附汇总与刷新时间。
+  用原生 `title` 而非弹层：零依赖、不挡视线、随 30s 轮询自动更新。
 
 ## 架构
 
 ```
-浏览器 (DSH :18080)                 Host 进程 (node)              workbuddy2api (:7863)
+浏览器 (DSH Web)                    Host 进程 (node)              workbuddy2api 网关
 ┌──────────────────────┐          ┌───────────────────┐        ┌──────────────────────┐
-│ CreditsDock 组件      │  fetch   │ /api/workbuddy.   │ fetch  │ GET /credits         │
-│ slot:                │ ───────► │     credits       │ ─────► │  （realm 感知的上游   │
-│ conversation.        │          │  /api/workbuddy.  │        │    计费查询 + TTL 缓存）│
-│ composer.dock        │          │     status        │ fetch  │ GET /status          │
-│  · 积分行（悬停明细）  │ ◄─────── │  读取 config.json │ ─────► │  （账号池 + 模型限流   │
-│  · 模型限流徽标       │   JSON   │  里的 api_key     │ ◄───── │    台账，30s 实时）    │
+│ CreditsDock 组件      │  fetch   │ /api/workbuddy.   │ fetch  │ GET /status          │
+│ slot:                │ ───────► │     credits       │ ─────► │  · accounts[].credits │
+│ conversation.        │          │  /api/workbuddy.  │        │    （剩余积分）        │
+│ composer.dock        │          │     status        │        │  · accounts[]         │
+│  · 积分行（悬停明细）  │ ◄─────── │  （两个端点共用    │ ◄───── │    .rate_limited_models│
+│  · 模型限流徽标       │   JSON   │    一次 /status）  │        │    []（模型级限流台账） │
 └──────────────────────┘          └───────────────────┘        └──────────────────────┘
 ```
 
-**为什么不让浏览器直连网关**：一是跨源（18080 → 7863）会被 CORS 拦；二是那会把网关
+**单一数据源**：积分与限流都取自网关的 `GET /status`。两个浏览器端点并发时会
+合并成一次上游请求（请求合并，不缓存结果——下次轮询总是取新值）。
+
+**为什么不让浏览器直连网关**：一是跨源会被 CORS 拦；二是那会把网关
 API Key 暴露在页面里。走 Host 代理两点都避免 —— 密钥只存在于 Host 进程内存中。
 
 ## 组成
@@ -110,16 +116,26 @@ patch 条目可传 `config` 覆盖默认值：
 
 密钥解析优先级：`config.apiKey` → `apiKeyEnv` → `projectDir/config.json`。
 
-**密钥必须配**：workbuddy2api 的 `/credits` 强制校验 API Key，无鉴权会返回
+**密钥必须配**：workbuddy2api 的 `/status` 强制校验 API Key，无鉴权会返回
 `401 invalid_api_key`。推荐用环境变量（不进版本库）：
 
 ```powershell
 $env:WORKBUDDY_API_KEY = '<your-gateway-api-key>'
 ```
 
-或者指向网关目录，让插件自己读它的 `config.json`。**包内不内置任何机器上的
-绝对路径** —— `projectDir` 默认空，需要时用上面的 `config` 或环境变量
-`WB_CREDITS_PROJECT_DIR` 指定。
+或者指向网关目录，让插件自己读它的 `config.json`。**包内不内置任何机器或部署
+专属地址** —— `baseUrl` 默认本机、`projectDir` 默认空，实际网关请在 profile 的
+`cordis.patch.yml` 里按 id 覆盖：
+
+```yaml
+- id: wb-credits
+  config:
+    baseUrl: http://<your-gateway-host>:7863   # 注意不带 /v1
+    projectDir: /path/to/workbuddy2api         # 或改用 apiKey / apiKeyEnv
+```
+
+> `baseUrl` 写网关**根地址**即可。`/v1` 是 LLM 的 OpenAI 兼容前缀，而插件查的是
+> 根路径的 `/status`；由于按绝对路径解析，带不带 `/v1` 结果相同，但不带更不易误解。
 
 
 ## 显示元数据
@@ -134,29 +150,35 @@ $env:WORKBUDDY_API_KEY = '<your-gateway-api-key>'
 
 ## 依赖的网关端点
 
-本插件依赖 workbuddy2api 的 `GET /credits`（`internal/server/handler.go`）：
+只需一个端点：workbuddy2api 的 `GET /status`（`internal/server/handler.go`，需鉴权）。
 
 ```json
-{"service":"workbuddy","ts":1789620787,
- "accounts":[{"uid":"...","nickname":"vva","realm":"cn","remain":1576,"used":3924,"size":5500,"ok":true}],
- "total":{"accounts":1,"failed":0,"ok":1,"remain":1576,"size":5500,"used":3924}}
+{"accounts":[
+   {"uid":"...","realm":"cn","nickname":"vva",
+    "credits":1781,                       // ← 剩余积分（本插件汇总这一项）
+    "cooling":false,"until":"...",         // ← 账号级冷却
+    "disabled":false,"manual_disabled":false,
+    "rate_limited_models":[                // ← 模型级限流台账（omitempty）
+      {"model":"glm-5.2","until":"...","reset_at":"...","reason":"..."}]}],
+ "healthy":4,"total":4,"realm_totals":{...}}
 ```
 
-带 TTL 缓存（60s），避免前端轮询把上游计费接口打限流。
+### 积分汇总口径
 
-### 依赖的网关端点（模型限流徽标）
+`remaining = Σ accounts[].credits`（取不到数字的账号按 0 计）。网关**不提供**
+「总额 / 已用」，因此界面不显示这两项。
 
-网关 `GET /status`（`internal/server/handler.go`，模型级台账见 `internal/pool/entry.go`
-`Status.RateLimitedModels`，issue #36）：
+### 模型限流台账口径
 
-```json
-{"accounts":[{"uid":"...","rate_limited_models":[{"model":"glm-5.2","until":"...","reset_at":"...","reason":"..."}]}], ...}
-```
-
-插件 Host 半边按模型聚合（同模型多账号取最晚 `reset_at`/`until`，计数受影响账号），
-经 `/api/workbuddy.status` 透给前端。**口径注意**：`reset_at` 是上游「将在 X 重置」的
-权威墙钟（滚动 24h 窗口）；`until` 是网关自己的保守退避截止，可能早于上游重置——
+`rate_limited_models[]` 带 `omitempty`——**没有限流时整个键都不出现**，空数组是常态
+而非异常。插件 Host 半边按模型聚合（同模型多账号取最晚 `reset_at`/`until`，计数受影响
+账号），经 `/api/workbuddy.status` 透给前端。**口径注意**：`reset_at` 是上游「将在 X 重置」
+的权威墙钟（滚动 24h 窗口）；`until` 是网关自己的保守退避截止，可能早于上游重置——
 徽标明细里两者都展示，以 `reset_at` 为准。
+
+> **关于 `/credits`**：早期版本用过网关的 `GET /credits`（返回每账号
+> remain/used/size）。那个端点是**本地未提交的附加实现**，上游网关并没有它
+> （请求会得到 `404 page not found`），所以现在只依赖 `/status`。
 
 ## 验证
 
@@ -169,7 +191,12 @@ $env:WB_CREDITS_LIVE='0'; node .\hosttest.mjs
 ```
 
 两个测试都**不需要网关在跑**：hosttest 自带 mock 网关，末尾的真机探测只是
-`[INFO]`、不参与通过/失败。
+`[INFO]`、不参与通过/失败。要对真实网关各打一枪：
+
+```powershell
+$env:WB_CREDITS_BASE_URL = 'http://<gateway-host>:7863'
+node .\hosttest.mjs
+```
 
 ## 卸载
 

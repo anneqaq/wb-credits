@@ -50,6 +50,12 @@ const GATEWAY_STATUS = {
     {
       uid: 'u1',
       nickname: 'alpha',
+      realm: 'cn',
+      credits: 1576,
+      cooling: false,
+      until: '0001-01-01T00:00:00Z',
+      disabled: false,
+      manual_disabled: false,
       rate_limited_models: [
         { model: 'glm-5.2', until: EARLIER, reset_at: EARLIER, reason: 'model usage limit exceeded' },
         { model: 'deepseek-v4.1', until: LATER, reset_at: LATER, reason: 'model usage limit exceeded' },
@@ -58,20 +64,29 @@ const GATEWAY_STATUS = {
     {
       uid: 'u2',
       nickname: 'beta',
+      realm: 'global',
+      credits: 420,
+      cooling: true,
+      until: LATER,
+      disabled: false,
+      manual_disabled: false,
       rate_limited_models: [
         { model: 'glm-5.2', until: LATER, reset_at: LATER, reason: 'model usage limit exceeded' },
       ],
     },
+    {
+      // 停用账号：credits 可能是 0 或缺失，插件不得因此崩或算成 NaN。
+      uid: 'u3',
+      nickname: 'gamma',
+      realm: 'cn',
+      credits: 0,
+      cooling: false,
+      disabled: true,
+      manual_disabled: false,
+    },
   ],
-}
-const GATEWAY_CREDITS = {
-  service: 'workbuddy',
-  ts: 1789620787,
-  accounts: [
-    { uid: 'u1', nickname: 'alpha', realm: 'cn', remain: 1576, used: 3924, size: 5500, ok: true },
-    { uid: 'u2', nickname: 'beta', realm: 'global', ok: false, error: 'upstream 401' },
-  ],
-  total: { accounts: 2, failed: 1, ok: 1, remain: 1576, size: 5500, used: 3924 },
+  healthy: 2,
+  total: 3,
 }
 
 const server = http.createServer((req, res) => {
@@ -86,13 +101,10 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify(GATEWAY_STATUS))
     return
   }
-  if (url.pathname === '/credits') {
-    res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify(GATEWAY_CREDITS))
-    return
-  }
+  // 上游网关**没有** /credits 路由（本地未提交的附加端点）。明确返回 404，
+  // 以便「插件不再依赖 /credits」这件事被测试盯住。
   res.writeHead(404)
-  res.end('not found')
+  res.end('404 page not found')
 })
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 const mockBase = `http://127.0.0.1:${server.address().port}`
@@ -104,15 +116,20 @@ try {
   note(routes.has(CREDITS_PATH), `注册了 ${CREDITS_PATH}`)
   note(routes.has(STATUS_PATH), `注册了 ${STATUS_PATH}`)
 
-  // --- /credits：归一化 ---
+  // --- /credits：积分来自 /status 的 accounts[].credits ---
   {
     const res = await routes.get(CREDITS_PATH).fetch(new Request(`http://x${CREDITS_PATH}`))
     const body = await res.json()
     note(res.status === 200 && body.ok === true, '/credits 返回 200 + ok')
-    note(body.remain === 1576 && body.used === 3924 && body.size === 5500, '/credits 汇总口径与网关一致（只累加成功账号）')
-    note(Array.isArray(body.accounts) && body.accounts.length === 2, '/credits accounts 数组透传')
-    note(body.accounts[1]?.ok === false && body.accounts[1]?.error === 'upstream 401', '/credits 失败账号带 error 原文（悬停明细要用）')
-    note(body.accounts[0]?.realm === 'cn', '/credits accounts[0] 带 realm')
+    note(body.remain === 1996, `汇总 = 各账号 credits 之和（1576+420+0=1996，实际 ${body.remain}）`)
+    note(Array.isArray(body.accounts) && body.accounts.length === 3, '/credits accounts 数组透传（3 个账号）')
+    note(body.accounts[0]?.credits === 1576, 'accounts[0].credits 透传')
+    note(body.accounts[0]?.realm === 'cn', 'accounts[0] 带 realm')
+    note(body.accounts[1]?.cooling === true, '冷却中账号带出 cooling 标记')
+    note(body.accounts[2]?.disabled === true, '停用账号带出 disabled 标记')
+    note(body.total?.accounts === 3 && body.total?.cooling === 1 && body.total?.disabled === 1,
+      `total 汇总账号数/冷却数/停用数（=${body.total?.accounts}/${body.total?.cooling}/${body.total?.disabled}）`)
+    note(body.accounts.every((a) => typeof a.credits === 'number'), '停用账号 credits=0 也保留为数字（不塌成 undefined）')
   }
 
   // --- /status：模型级限流聚合 ---
@@ -131,6 +148,16 @@ try {
     const ds = rows.find((r) => r.model === 'deepseek-v4.1')
     note(ds?.accounts === 1 && ds?.reset_at === LATER, 'deepseek-v4.1 单账号行保持原样')
     note(rows[0].model < rows[1].model, '台账行按模型名排序（稳定输出）')
+    note(!rows.some((r) => r.model === undefined), '无 rate_limited_models 的账号不产生空行（omitempty 常态）')
+  }
+
+  // --- 两个端点共享一次并发请求（合并，不是缓存陈旧值） ---
+  {
+    const [a, b] = await Promise.all([
+      routes.get(CREDITS_PATH).fetch(new Request(`http://x${CREDITS_PATH}`)),
+      routes.get(STATUS_PATH).fetch(new Request(`http://x${STATUS_PATH}`)),
+    ])
+    note(a.status === 200 && b.status === 200, '并发调用两个端点都成功（共享同一次 /status）')
   }
 
   // --- HEAD 探活 ---
@@ -164,15 +191,25 @@ try {
   note(routes.size === 0, `卸载后路由全部撤销（disposer 生效，routes=${routes.size}）`)
 
   // --- 真机探测（可选，不参与判定） ---
+  // WB_CREDITS_BASE_URL 可指向真实网关（默认本机 7863）；密钥仍按
+  // config.apiKey → apiKeyEnv → projectDir 的顺序解析。
   if (process.env.WB_CREDITS_LIVE !== '0') {
-    apply(ctx, {})
+    const liveBase = process.env.WB_CREDITS_BASE_URL ?? 'http://127.0.0.1:7863'
+    const liveKey = process.env.WORKBUDDY_API_KEY ?? ''
+    const liveProject = process.env.WB_CREDITS_PROJECT_DIR ?? 'D:/app/work-deepseek/workbuddy2api'
+    apply(ctx, { baseUrl: liveBase, apiKey: liveKey, projectDir: liveProject })
     for (const [label, path] of [['credits', CREDITS_PATH], ['status', STATUS_PATH]]) {
       const route = routes.get(path)
       if (!route) continue
       try {
         const res = await route.fetch(new Request(`http://127.0.0.1:18080${path}`))
         const body = await res.json().catch(() => null)
-        console.log(`[INFO] 真机 ${label}: HTTP ${res.status}`, body === null ? '' : JSON.stringify(body).slice(0, 400))
+        const brief = body?.ok === true
+          ? (label === 'credits'
+            ? `remain=${body.remain} accounts=${body.total?.accounts} cooling=${body.total?.cooling} disabled=${body.total?.disabled}`
+            : `rate_limited=${body.rate_limited?.length}`)
+          : JSON.stringify(body).slice(0, 200)
+        console.log(`[INFO] 真机 ${label} @ ${liveBase}: HTTP ${res.status} ${brief}`)
       } catch (e) {
         console.log(`[INFO] 真机 ${label} 不可达（网关未启动则属预期）: ${e.message}`)
       }
